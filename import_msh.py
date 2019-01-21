@@ -1,6 +1,7 @@
 #####
 #
-# Copyright 2017 Clemens Wallrath
+# Copyright 2017-2019 Clemens Wallrath
+# Copyright 2019 Thomas Portassau
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,15 +51,16 @@ ELEMENT_TYPES = {
             4: 4, # 4-node tetrahedron
             5: 8, # 8-node hexahedron
             6: 6, # 6-node prism
-            7: 5 # 5-node pyramid
+            7: 5, # 5-node pyramid
+            15: 0 # 1-node point, skip imported anyway
             # ... it gets weird from here, I'll probably never implement these anyway
             }
 
 bl_info = {
     "name": "MSH format",
     "description": "Import MSH, Import gmsh mesh.",
-    "author": "Clemens Wallrath",
-    "version": (0, 1),
+    "author": "Clemens Wallrath, Thomas Portassau",
+    "version": (0, 2, 0),
     "blender": (2, 74, 0),
     "location": "File > Import-Export",
     "warning": "", # used for warning icon and text in addons panel
@@ -147,7 +149,7 @@ class ImportMSH(bpy.types.Operator, ImportHelper):
         return {'FINISHED'}
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportMSH.bl_idname, text="gmsh MSH (v2) Mesh (.msh)")
+    self.layout.operator(ImportMSH.bl_idname, text="gmsh MSH (v2/v4) Mesh (.msh)")
 
 
 def register():
@@ -160,9 +162,15 @@ def unregister():
 
 def contains(faces, face): #TODO: performance is probably shit
     s = set(face)
-    d = [(face, f) for f in faces if s == set(f)] 
+    d = [(face, f) for f in faces if s == set(f)]
     return len(d) != 0
 
+def skipUnknownCmd(f,c):
+    print("Skiping unknown command :'%s' "%(c) )
+    c = c.strip("$")
+    tmp = c
+    while("$End"+c not in tmp and len(tmp)>0):
+        tmp = f.readline().strip("\r\n")
 
 def load(operator, context, filepath):
     # TODO: binary format
@@ -172,61 +180,118 @@ def load(operator, context, filepath):
     if first_line != "$MeshFormat":
         return None
     s = list(f.readline().split())
-    version_number, file_type, data_size = s[0], int(s[1]), int(s[2])
+    version_number, file_type, data_size = float(s[0]), int(s[1]), int(s[2])
 
     f.readline() # $EndMeshFormat
-    f.readline() # $PhysicalNames
-
-    number_of_names = int(f.readline().rstrip())
+    cmd = f.readline().strip("\r\n") # $PhysicalNames ???
     physical_names = {1: {}, 2: {}, 3: {}} # dimension -> number -> name
-    for i in range(number_of_names):
-        line = f.readline()
-        if line.isspace():
-            continue    # skip empty lines
-        s = list(shlex.split(line))
-        dim, num, name = int(s[0]), int(s[1]), s[2]
-        #physical_names.append({"dim": dim, "num": num, "name": name})
-        physical_names[dim][num] = name
+    if cmd == "$PhysicalNames":
+        number_of_names = int(f.readline().rstrip())
+        for i in range(number_of_names):
+            line = f.readline()
+            if line.isspace():
+                continue    # skip empty lines
+            s = list(shlex.split(line))
+            dim, num, name = int(s[0]), int(s[1]), s[2]
+            #physical_names.append({"dim": dim, "num": num, "name": name})
+            physical_names[dim][num] = name
 
-    f.readline() # $EndPhysicalNames
-    f.readline() # $Nodes
+        f.readline() # $EndPhysicalNames
+        cmd = f.readline().strip("\r\n") # $Nodes
 
-    number_of_nodes = int(f.readline().rstrip())
+
+    if "Nodes" not in cmd: #v4 have $Entities, skiping unimplemented
+        skipUnknownCmd(f,cmd)
+        cmd = f.readline().strip("\r\n") # $Nodes
+
+    number_of_nodes = 0
     nodes = {}
-    for i in range(number_of_nodes):
-        line = f.readline()
-        if line.isspace():
-            continue    # skip empty lines
-        s = list(line.split())
-        num, x, y, z = int(s[0]), float(s[1]), float(s[2]), float(s[3])
-        nodes[num] = (x, y, z)
+    if (cmd == "$ParametricNodes" or cmd == "$Nodes") and version_number < 4.0:
+        number_of_nodes = int(f.readline().rstrip())
+        for i in range(number_of_nodes):
+            line = f.readline()
+            if line.isspace():
+                continue    # skip empty lines
+            s = list(line.split())
+            num, x, y, z = int(s[0]), float(s[1]), float(s[2]), float(s[3])
+            nodes[num] = (x, y, z)
 
-    f.readline() # $EndNodes
+        f.readline() # $EndNodes
+    elif cmd == "$Nodes":
+        tmp = f.readline().rstrip().split(" ")
+        number_of_nodes = int(tmp[1])
+        number_of_entity_block = int(tmp[0])
+        for i in range(number_of_entity_block):
+            line = f.readline()
+            num_nodes_in_entity = int(line.split(" ")[-1])
+            for j in range(num_nodes_in_entity):
+                line = f.readline()
+                s = list(line.split())
+                num, x, y, z = int(s[0]), float(s[1]), float(s[2]), float(s[3])
+                nodes[num] = (x, y, z)
+
+        f.readline() # $EndNodes
+    else:
+        skipUnknownCmd(f,cmd)
+
+
+
     f.readline() # $Elements
 
-    number_of_elements = int(f.readline().strip())
     elements = {}
-    for i in range(number_of_elements):
-        line = f.readline()
-        if line.isspace():
-            continue    # skip empty lines
-        s = list(line.split())
-        num = int(s[0])
-        elem_type = int(s[1])
-        num_tags = int(s[2])
-        j = 3
-        tags = [] 
-        # first tag is number of physical entity, second is number of elementary geometrical entity, followed by mesh partition numbers which we ignore (if present)
-        for k in range(num_tags):
-            tags.append(int(s[j]))
-            j += 1
-        physical_entity = tags[0]
-        geo_entity = tags[1]
-        elem_nodes = []
-        for k in range(ELEMENT_TYPES[elem_type]):
-            elem_nodes.append(int(s[j]))
-            j += 1
-        elements[num] = {"type": elem_type, "physical_entity": physical_entity, "geo_entity": geo_entity, "nodes": elem_nodes}
+    number_of_elements = 0
+    if version_number < 4.0:
+        number_of_elements = int(f.readline().strip())
+        for i in range(number_of_elements):
+            line = f.readline()
+            if line.isspace():
+                continue    # skip empty lines
+            s = list(line.split())
+            num = int(s[0])
+            elem_type = int(s[1])
+            num_tags = int(s[2])
+            j = 3
+            tags = []
+            # first tag is number of physical entity, second is number of elementary geometrical entity, followed by mesh partition numbers which we ignore (if present)
+            for k in range(num_tags):
+                tags.append(int(s[j]))
+                j += 1
+            physical_entity = tags[0]
+            geo_entity = tags[1]
+            elem_nodes = []
+            try:
+                for k in range(ELEMENT_TYPES[elem_type]):
+                    elem_nodes.append(int(s[j]))
+                    j += 1
+            except KeyError:
+                print("Element %d not implemented"%(elem_type))
+            elements[num] = {"type": elem_type, "physical_entity": physical_entity, "geo_entity": geo_entity, "nodes": elem_nodes}
+    else:
+        tmp = f.readline().rstrip().split(" ")
+        number_of_entity_block = int(tmp[0])
+        number_of_elements = int(tmp[1])
+        for i in range(number_of_entity_block):
+            line = f.readline()
+            s = list(line.split())
+            elem_type = int(s[2])
+            number_of_elements_in_entity = int(s[3])
+            for i in range(number_of_elements_in_entity):
+                line = f.readline()
+                if line.isspace():
+                    continue    # skip empty lines
+                s = list(line.split())
+                num = int(s[0])
+                j = 1
+                elem_nodes = []
+                try:
+                    for k in range(ELEMENT_TYPES[elem_type]):
+                        elem_nodes.append(int(s[j]))
+                        j += 1
+                except KeyError:
+                    print("Element %d not implemented"%(elem_type))
+                elements[num] = {"type": elem_type, "nodes": elem_nodes}
+
+
 
     verts = []
     edges = []
@@ -248,7 +313,10 @@ def load(operator, context, filepath):
             key = tuple(sorted(face))
             if not faces_dict.get(key): # blender will eliminate duplicate faces anyway, but that corrups the material -> face mapping since the indices change
                 faces_dict[key] = face
-                surface_names.append(physical_names[2][element["physical_entity"]])
+                if len(physical_names[2]) > 0:
+                    surface_names.append(physical_names[2][element["physical_entity"]])
+                else:
+                    surface_names.append("no_name")
         #TODO: keep this?
         #elif element["type"] == 4: # tetrahedron
         #    for p in [[0,1,2],[1,2,3],[2,3,0],[3,0,1]]:
