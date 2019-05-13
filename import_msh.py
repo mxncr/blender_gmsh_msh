@@ -60,8 +60,8 @@ bl_info = {
     "name": "MSH format",
     "description": "Import MSH, Import gmsh mesh.",
     "author": "Clemens Wallrath, Thomas Portassau",
-    "version": (0, 2, 0),
-    "blender": (2, 74, 0),
+    "version": (0, 3, 0),
+    "blender": (2, 80, 0),
     "location": "File > Import-Export",
     "warning": "", # used for warning icon and text in addons panel
     "wiki_url": "http://wiki.blender.org/index.php/Extensions:2.5/Py/"
@@ -73,12 +73,12 @@ class ImportMSH(bpy.types.Operator, ImportHelper):
     bl_idname = "import_mesh.msh"
     bl_label = "Import MSH Mesh"
     filename_ext = ".msh"
-    filter_glob = StringProperty(
+    filter_glob : StringProperty(
         default="*.msh",
         options={'HIDDEN'},
     )
 
-    axis_forward = EnumProperty(
+    axis_forward : EnumProperty(
             name="Forward",
             items=(('X', "X Forward", ""),
                    ('Y', "Y Forward", ""),
@@ -89,7 +89,7 @@ class ImportMSH(bpy.types.Operator, ImportHelper):
                    ),
             default='Y',
             )
-    axis_up = EnumProperty(
+    axis_up : EnumProperty(
             name="Up",
             items=(('X', "X Up", ""),
                    ('Y', "Y Up", ""),
@@ -117,9 +117,9 @@ class ImportMSH(bpy.types.Operator, ImportHelper):
 
         scene = bpy.context.scene
         obj = bpy.data.objects.new(mesh.name, mesh)
-        scene.objects.link(obj)
-        scene.objects.active = obj
-        obj.select = True
+        bpy.context.scene.collection.objects.link(obj)
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
 
         obj.matrix_world = global_matrix
 
@@ -153,12 +153,12 @@ def menu_func_import(self, context):
 
 
 def register():
-    bpy.utils.register_module(__name__)
-    bpy.types.INFO_MT_file_import.append(menu_func_import)
+    bpy.utils.register_class(ImportMSH)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
 def unregister():
-    bpy.utils.unregister_module(__name__)
-    bpy.types.INFO_MT_file_import.remove(menu_func_import)
+    bpy.utils.unregister_class(ImportMSH)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 
 def contains(faces, face): #TODO: performance is probably shit
     s = set(face)

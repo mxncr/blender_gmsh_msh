@@ -1,3 +1,7 @@
+# Changelog
+
+- Adapted for compatibility with blender 2.80 (may no longer be compatible with previous versions)
+
 # What is this?
 
 This is an addon script for [Blender](https://blender.org) to allow importing [gmsh](http://gmsh.info)'s [native file format](http://gmsh.info/doc/texinfo/gmsh.html#MSH-ASCII-file-format) (".msh").
